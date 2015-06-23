@@ -94,7 +94,7 @@ public class DiscreteHistogram implements Accumulator<Double, TreeMap<Double, In
 	 *
 	 * @return Size of the {@link #treeMap}
 	 */
-	public int getSize() {
+	public int getSize() {N
 		return treeMap.size();
 	}
 
