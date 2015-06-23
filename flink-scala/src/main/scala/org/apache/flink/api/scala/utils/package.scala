@@ -22,6 +22,10 @@ import org.apache.flink.annotation.PublicEvolving
 import org.apache.flink.api.common.typeinfo.{BasicTypeInfo, TypeInformation}
 import org.apache.flink.api.java.Utils
 import org.apache.flink.api.java.Utils.ChecksumHashCode
+import org.apache.flink.api.common.accumulators.{ContinuousHistogram, DiscreteHistogram}
+import org.apache.flink.api.common.typeinfo.{BasicTypeInfo, TypeInformation}
+import org.apache.flink.api.java.Utils
+import org.apache.flink.api.java.typeutils.GenericTypeInfo
 import org.apache.flink.api.java.utils.{DataSetUtils => jutils}
 import org.apache.flink.util.AbstractID
 
@@ -128,4 +132,47 @@ package object utils {
     }
   }
 
+  /**
+   * This class provides simple utility methods for dataset of double values, like constructing
+   * discrete and continuous histograms.
+   *
+   * @param self Data Set
+   */
+  implicit class DoubleDataSetUtils(val self: DataSet[Double]) {
+
+    /**
+     * Creates a [[org.apache.flink.api.common.accumulators.DiscreteHistogram]] from the data set
+     *
+     * @return A histogram over data
+     */
+    def createDiscreteHistogram: DataSet[DiscreteHistogram] = {
+      implicit val typeInfo = new GenericTypeInfo[DiscreteHistogram](classOf[DiscreteHistogram])
+      self.mapPartition(values => {
+        val localHistogram = new DiscreteHistogram()
+        values.foreach(v => localHistogram.add(v))
+        Seq(localHistogram)
+      }).reduce((h1, h2) => {
+        h1.merge(h2)
+        h1
+      })
+    }
+
+    /**
+     * Creates a [[org.apache.flink.api.common.accumulators.ContinuousHistogram]] from the data set
+     *
+     * @param bins Number of bins in the histogram
+     * @return A histogram over data
+     */
+    def createContinuousHistogram(bins: Int): DataSet[ContinuousHistogram] = {
+      implicit val typeInfo = new GenericTypeInfo[ContinuousHistogram](classOf[ContinuousHistogram])
+      self.mapPartition(values => {
+        val localHistogram = new ContinuousHistogram(bins)
+        values.foreach(v => localHistogram.add(v))
+        Seq(localHistogram)
+      }).reduce((h1, h2) => {
+        h1.merge(h2)
+        h1
+      })
+    }
+  }
 }
