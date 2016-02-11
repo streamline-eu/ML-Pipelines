@@ -535,7 +535,9 @@ object ALS {
     itemOut: DataSet[(Int, OutBlockInformation)],
     userIn: DataSet[(Int, InBlockInformation)],
     factors: Int,
-    lambda: Double, blockIDPartitioner: FlinkPartitioner[Int]):
+    lambda: Double, blockIDPartitioner: FlinkPartitioner[Int],
+    alpha: Double = 1.0,
+    implicitALS: Boolean = false):
   DataSet[(Int, Array[Array[Double]])] = {
     // send the item vectors to the blocks whose users have rated the items
     val partialBlockMsgs = itemOut.join(items).where(0).equalTo(0).
@@ -640,8 +642,16 @@ object ALS {
               while (i < users.length) {
                 numRatings(users(i)) += 1
                 blas.daxpy(matrix.length, 1, matrix, 1, userXtX(users(i)), 1)
-                blas.daxpy(vector.length, ratings(i), vector, 1, userXy(users(i)), 1)
+                if(implicitALS) {
 
+                  val c = alpha * ratings(i)
+                  blas.daxpy(matrix.length, c, matrix, 1, userXtX(users(i)), 1)
+                  blas.daxpy(vector.length, c + 1.0, vector, 1, userXy(users(i)), 1)
+                }
+                else {
+
+                  blas.daxpy(vector.length, ratings(i), vector, 1, userXy(users(i)), 1)
+                }
                 i += 1
               }
               p += 1
@@ -651,6 +661,7 @@ object ALS {
           }
 
           val array = new Array[Array[Double]](numUsers)
+
 
           i = 0
           while(i < numUsers){
