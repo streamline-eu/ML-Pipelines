@@ -18,7 +18,7 @@
 
 package org.apache.flink.ml.recommendation
 
-import java.{util, lang}
+import java.lang
 
 import org.apache.flink.api.common.operators.base.JoinOperatorBase.JoinHint
 import org.apache.flink.api.scala._
@@ -36,6 +36,7 @@ import org.netlib.util.intW
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
+import scala.math
 import scala.util.Random
 
 /** Alternating least squares algorithm to calculate a matrix factorization.
@@ -91,8 +92,17 @@ import scala.util.Random
   *  Regularization factor. Tune this value in order to avoid overfitting/generalization.
   *  (Default value: '''1''')
   *
-  *  - [[org.apache.flink.ml.regression.MultipleLinearRegression.Iterations]]:
+  *  - [[org.apache.flink.ml.recommendation.ALS.Iterations]]:
   *  The number of iterations to perform. (Default value: '''10''')
+  *
+  *  - [[org.apache.flink.ml.recommendation.ALS.ImplicitPrefs]]:
+  *  Implicit property of the observations, meaning that they do not represent an explicit
+  *  preference of the user, just the implicit information how many times the user consumed the
+  *  item (Default value: '''false''')
+  *
+  *  - [[org.apache.flink.ml.recommendation.ALS.Alpha]]:
+  *  Weight of the positive implicit observations. Should be non-negative.
+  *  (Default value: '''1''')
   *
   *  - [[org.apache.flink.ml.recommendation.ALS.Blocks]]:
   *  The number of blocks into which the user and item matrix a grouped. The fewer
@@ -153,6 +163,26 @@ class ALS extends Predictor[ALS] {
     */
   def setIterations(iterations: Int): ALS = {
     parameters.add(Iterations, iterations)
+    this
+  }
+
+  /** Sets the input observations to be implicit, thus using the iALS algorithm for learning.
+    *
+    * @param implicitPrefs
+    * @return
+    */
+  def setImplicit(implicitPrefs: Boolean): ALS = {
+    parameters.add(ImplicitPrefs, implicitPrefs)
+    this
+  }
+
+  /** Sets the weight of the positive implicit observations. Only affects the implicit learner.
+    *
+    * @param alpha
+    * @return
+    */
+  def setAlpha(alpha: Double): ALS = {
+    parameters.add(Alpha, alpha)
     this
   }
 
@@ -271,6 +301,14 @@ object ALS {
 
   case object Iterations extends Parameter[Int] {
     val defaultValue: Option[Int] = Some(10)
+  }
+
+  case object ImplicitPrefs extends Parameter[Boolean] {
+    val defaultValue: Option[Boolean] = Some(false)
+  }
+
+  case object Alpha extends Parameter[Double] {
+    val defaultValue: Option[Double] = Some(1.0)
   }
 
   case object Blocks extends Parameter[Int] {
@@ -445,6 +483,8 @@ object ALS {
       val factors = resultParameters(NumFactors)
       val iterations = resultParameters(Iterations)
       val lambda = resultParameters(Lambda)
+      val implicitPrefs = resultParameters(ImplicitPrefs)
+      val alpha = resultParameters(Alpha)
 
       val ratings = input.map {
         entry => {
@@ -498,8 +538,9 @@ object ALS {
       val items = initialItems.iterate(iterations) {
         items => {
           val users = updateFactors(userBlocks, items, itemOut, userIn, factors, lambda,
-            blockIDPartitioner)
-          updateFactors(itemBlocks, users, userOut, itemIn, factors, lambda, blockIDPartitioner)
+            blockIDPartitioner, implicitPrefs, alpha)
+          updateFactors(itemBlocks, users, userOut, itemIn, factors, lambda, blockIDPartitioner,
+            implicitPrefs, alpha)
         }
       }
 
@@ -510,7 +551,7 @@ object ALS {
 
       // perform last half-step to calculate the user matrix
       val users = updateFactors(userBlocks, pItems, itemOut, userIn, factors, lambda,
-        blockIDPartitioner)
+        blockIDPartitioner, implicitPrefs, alpha)
 
       instance.factorsOption = Some((
         unblock(users, userOut, blockIDPartitioner),
@@ -536,8 +577,7 @@ object ALS {
     userIn: DataSet[(Int, InBlockInformation)],
     factors: Int,
     lambda: Double, blockIDPartitioner: FlinkPartitioner[Int],
-    alpha: Double = 1.0,
-    implicitALS: Boolean = false):
+    implicitPrefs: Boolean, alpha: Double):
   DataSet[(Int, Array[Array[Double]])] = {
     // send the item vectors to the blocks whose users have rated the items
     val partialBlockMsgs = itemOut.join(items).where(0).equalTo(0).
@@ -616,8 +656,8 @@ object ALS {
           while(i  < matricesToClear){
             numRatings(i) = 0
 
-            util.Arrays.fill(userXtX(i), 0.0)
-            util.Arrays.fill(userXy(i), 0.0)
+            java.util.Arrays.fill(userXtX(i), 0.0)
+            java.util.Arrays.fill(userXy(i), 0.0)
 
             i += 1
           }
@@ -642,14 +682,15 @@ object ALS {
               while (i < users.length) {
                 numRatings(users(i)) += 1
                 blas.daxpy(matrix.length, 1, matrix, 1, userXtX(users(i)), 1)
-                if(implicitALS) {
 
-                  val c = alpha * ratings(i)
-                  blas.daxpy(matrix.length, c, matrix, 1, userXtX(users(i)), 1)
-                  blas.daxpy(vector.length, c + 1.0, vector, 1, userXy(users(i)), 1)
-                }
-                else {
-
+                if(implicitPrefs) {
+                  // Extension to the original paper to handle negative observations.
+                  // Confidence is a function of absolute value of the observation
+                  // instead so that it is never negative. c1 is confidence - 1.0.
+                  val c1 = alpha * math.abs(ratings(i))
+                  blas.daxpy(matrix.length, c1, matrix, 1, userXtX(users(i)), 1)
+                  blas.daxpy(vector.length, c1 + 1.0, vector, 1, userXy(users(i)), 1)
+                } else {
                   blas.daxpy(vector.length, ratings(i), vector, 1, userXy(users(i)), 1)
                 }
                 i += 1
