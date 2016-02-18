@@ -616,12 +616,13 @@ object ALS {
         InBlockInformation), (Int, Array[Array[Double]])](){
 
         // in order to save space, store only the upper triangle of the XtX matrix
-        val triangleSize = (factors*factors - factors)/2 + factors
+        val triangleSize = (factors*factors - factors)/2 + factors //sum 1..factors
         val matrix = Array.fill(triangleSize)(0.0)
         val fullMatrix = Array.fill(factors * factors)(0.0)
         val userXtX = new ArrayBuffer[Array[Double]]()
         val userXy = new ArrayBuffer[Array[Double]]()
         val numRatings = new ArrayBuffer[Int]()
+        val sumRatings = new ArrayBuffer[Array[Double]]()
 
         override def coGroup(left: lang.Iterable[(Int, Int, Array[Array[Double]])],
           right: lang.Iterable[(Int, InBlockInformation)],
@@ -643,6 +644,9 @@ object ALS {
               userXtX += Array.fill(triangleSize)(0.0)
               userXy += Array.fill(factors)(0.0)
               numRatings.+=(0)
+
+              val numItems = inInfo.ratingsForBlock(0).ratings.length
+              sumRatings += Array.fill(numItems)(0.0)
 
               i += 1
             }
@@ -678,9 +682,11 @@ object ALS {
 
               val (users, ratings) = inInfo.ratingsForBlock(itemBlock)(p)
 
+
               var i = 0
               while (i < users.length) {
                 numRatings(users(i)) += 1
+                sumRatings(p)(users(i)) += ratings(i)
                 blas.daxpy(matrix.length, 1, matrix, 1, userXtX(users(i)), 1)
 
                 if(implicitPrefs) {
@@ -688,7 +694,8 @@ object ALS {
                   // Confidence is a function of absolute value of the observation
                   // instead so that it is never negative. c1 is confidence - 1.0.
                   val c1 = alpha * math.abs(ratings(i))
-                  blas.daxpy(matrix.length, c1, matrix, 1, userXtX(users(i)), 1)
+                  //userXtX(users(i))(users(i)) += userXtX(users(i))(users(i))*c1
+                  //blas.daxpy(matrix.length, c1, matrix, 1, userXtX(users(i)), 1)
                   blas.daxpy(vector.length, c1 + 1.0, vector, 1, userXy(users(i)), 1)
                 } else {
                   blas.daxpy(vector.length, ratings(i), vector, 1, userXy(users(i)), 1)
@@ -710,8 +717,13 @@ object ALS {
 
             var f = 0
 
+
             // add regularization constant
             while(f < factors){
+              val c1 = alpha * math.abs(sumRatings(f)(i))
+              if((f*factors + f) % (factors + 1) == 0){
+                fullMatrix(f*factors + f) += fullMatrix(f*factors + f)*c1
+              }
               fullMatrix(f*factors + f) += lambda * numRatings(i)
               f += 1
             }
