@@ -647,7 +647,7 @@ object ALS {
 
               val numItems = inInfo.ratingsForBlock(0).ratings.length
               sumRatings += Array.fill(numItems)(0.0)
-
+              //sumRatings += Array.fill(factors)(0.0)
               i += 1
             }
 
