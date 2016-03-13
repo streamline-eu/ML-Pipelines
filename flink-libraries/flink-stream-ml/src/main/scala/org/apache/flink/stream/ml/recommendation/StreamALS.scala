@@ -82,7 +82,12 @@ object StreamALS {
           userFactors.getExecutionEnvironment.execute()
 
           // Map the input stream with the model read from disk in the open function
-          input.map(new MapWithModel(userPersistLocation, itemPersistLocation))
+          val prediction = input.map(new MapWithModel(userPersistLocation, itemPersistLocation))
+
+          StreamMLTools.discardModel(prediction, userPersistLocation)
+          StreamMLTools.discardModel(prediction, itemPersistLocation)
+
+          prediction
         }
 
         case None => throw new RuntimeException("The ALS model has not been fitted to data. " +
@@ -100,7 +105,6 @@ object StreamALS {
     val p : mutable.Map[Int, Array[Double]] = new mutable.HashMap()
     var factors : Int = _
 
-    //TODO consider graceful handling of persist file already being cleaned up by parallel subtask
     override def open(parameters: Configuration): Unit = {
       val inputFormat =
         new TypeSerializerInputFormat[ALS.Factors](createTypeInformation[ALS.Factors])
@@ -111,14 +115,6 @@ object StreamALS {
 
     override def map(value: (Int, Int)): (Int, Int, Double) = {
       (value._1, value._2, blas.ddot(factors, q(value._1), 1, p(value._2), 1))
-    }
-
-    // clean up temporary model persist paths from the first subtask
-    override def close(): Unit = {
-      if (getRuntimeContext.getIndexOfThisSubtask == 0){
-        StreamMLTools.cleanUpLocation(userPersistLocation)
-        StreamMLTools.cleanUpLocation(itemPersistLocation)
-      }
     }
 
     def readFactorFile(inputFormat: FileInputFormat[ALS.Factors], file : String,

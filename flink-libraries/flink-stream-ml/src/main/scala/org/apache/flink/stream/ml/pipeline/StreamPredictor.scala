@@ -131,9 +131,13 @@ object StreamPredictor {
 
         implicit val resultTypeInformation = createTypeInformation[(Testing, PredictionValue)]
 
-        input.map(new PredictorMap[Instance, Model, Testing, PredictionValue](
+        val prediction = input.map(new PredictorMap[Instance, Model, Testing, PredictionValue](
           predictOperation, persistLocation)
-        )
+        ).name("StreamPredictor")
+
+        StreamMLTools.discardModel(prediction, persistLocation)
+
+        prediction
       }
     }
   }
@@ -144,7 +148,6 @@ object StreamPredictor {
     extends RichMapFunction[Testing, (Testing, PredictionValue)] {
     var model : Model = _
 
-    //TODO consider graceful handling of persist file already being cleaned up by parallel subtask
     override def open(parameters: Configuration): Unit = {
       val config = getRuntimeContext.getExecutionConfig
       val modelSerializer = createTypeInformation[Model].createSerializer(config)
@@ -172,13 +175,6 @@ object StreamPredictor {
 
     override def map(value: Testing): (Testing, PredictionValue) = {
       (value, predictOperation.predict(value, model))
-    }
-
-    // clean up temporary model persist paths from the first subtask
-    override def close(): Unit = {
-      if (getRuntimeContext.getIndexOfThisSubtask == 0){
-        StreamMLTools.cleanUpLocation("/tmp/flink-binary-model")
-      }
     }
   }
 }

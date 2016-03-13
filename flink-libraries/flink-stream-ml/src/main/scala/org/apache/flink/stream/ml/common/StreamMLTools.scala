@@ -22,7 +22,8 @@ import java.net.URI
 
 import org.apache.flink.api.scala.ExecutionEnvironment
 import org.apache.flink.core.fs.{Path, FileSystem}
-import org.apache.flink.streaming.api.scala.StreamExecutionEnvironment
+import org.apache.flink.streaming.api.functions.sink.RichSinkFunction
+import org.apache.flink.streaming.api.scala.{DataStream, StreamExecutionEnvironment}
 import org.apache.flink.util.StringUtils
 
 import scala.util.Random
@@ -93,5 +94,12 @@ object StreamMLTools {
     if (fileSystem.exists(path)){
       fileSystem.delete(path, true)
     }
+  }
+
+  def discardModel[T](stream : DataStream[T], modelLocation : String) = {
+    stream.addSink(new RichSinkFunction[T] {
+      override def invoke(value: T): Unit = ()
+      override def close(): Unit = cleanUpLocation(modelLocation)
+    }).setParallelism(1).name("Model Discard:" + modelLocation)
   }
 }
