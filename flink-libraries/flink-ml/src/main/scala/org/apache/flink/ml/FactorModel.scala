@@ -18,17 +18,26 @@
 
 package org.apache.flink.ml
 
+import org.apache.flink.api.java.utils.ParameterTool
 import org.apache.flink.api.scala._
+import org.apache.flink.core.fs.FileSystem.WriteMode
 import org.apache.flink.ml.recommendation.ALS
+import org.apache.flink.api.common.operators.Order
 
 object FactorModel {
   def main(args: Array[String]) {
 
+    val params = ParameterTool.fromArgs(args)
+    val inputFile = params.getRequired("input")
+    val outputFile = params.getRequired("output")
+    val topk = params.getInt("topk", 10000)
+
+
     val env = ExecutionEnvironment.getExecutionEnvironment
 
     // Read and parse the input data
-    val input = env.readCsvFile[(Int, Int)]("/tmp/flink-etl-out")
-      .map(pair => (pair._1, pair._2, 1.0))
+    val input = env.readTextFile(inputFile)
+      .map(line => (line.split(" ")(1).toInt, line.split(" ")(2).toInt, 1.0))
 
     // Create a model using FlinkML
     val model = ALS()
@@ -36,10 +45,18 @@ object FactorModel {
 
     model.fit(input)
 
-    val test = env.generateSequence(0,99).map(_.toInt) cross env.generateSequence(0,54).map(_.toInt)
+    val users = input.map(_._1).distinct
+    val items = input.map(_._2).distinct
 
-//    val test = env.fromElements((0,0))
+    val test = users.cross(items)
 
-    model.predict(test).print
+    val output = model.predict(test)
+      .groupBy(0)
+      .sortGroup(2, Order.DESCENDING)
+      .first(topk)
+
+    output.writeAsText(outputFile, WriteMode.OVERWRITE)
+
+    env execute
   }
 }
