@@ -29,6 +29,7 @@ import org.apache.flink.ml.pipeline.{FitOperation, PredictDataSetOperation, Pred
 import org.apache.flink.types.Value
 import org.apache.flink.util.Collector
 import org.apache.flink.api.common.functions.{Partitioner => FlinkPartitioner, GroupReduceFunction, CoGroupFunction}
+import org.apache.flink.ml._
 
 import com.github.fommil.netlib.BLAS.{ getInstance => blas }
 import com.github.fommil.netlib.LAPACK.{ getInstance => lapack }
@@ -579,6 +580,8 @@ object ALS {
     lambda: Double, blockIDPartitioner: FlinkPartitioner[Int],
     implicitPrefs: Boolean, alpha: Double):
   DataSet[(Int, Array[Array[Double]])] = {
+    val YtY = if(implicitPrefs) Some(computeYtY(items, factors)) else None
+
     // send the item vectors to the blocks whose users have rated the items
     val partialBlockMsgs = itemOut.join(items).where(0).equalTo(0).
       withPartitioner(blockIDPartitioner).apply {
@@ -686,18 +689,22 @@ object ALS {
               while (i < users.length) {
                 numRatings(users(i)) += 1
                 //sumRatings(p)(users(i)) += ratings(i)
-                blas.daxpy(matrix.length, 1, matrix, 1, userXtX(users(i)), 1)
+
 
                 if(implicitPrefs) {
                   // Extension to the original paper to handle negative observations.
                   // Confidence is a function of absolute value of the observation
                   // instead so that it is never negative. c1 is confidence - 1.0.
-                  val c1 = alpha * math.abs(ratings(i))
-                  blas.daxpy(matrix.length, (c1 + 1.0)/c1, matrix, 1, userXtX(users(i)), 1)
-                  //userXtX(users(i))(users(i)) += userXtX(users(i))(users(i))*c1
-                  //blas.daxpy(matrix.length, c1, matrix, 1, userXtX(users(i)), 1)
-                  blas.daxpy(vector.length, c1 + 1.0, vector, 1, userXy(users(i)), 1)
+                  //val c1 = alpha * math.abs(ratings(i))
+                  if(ratings(i)>0) {
+                    val c1 = alpha * ratings(i)
+                    blas.daxpy(matrix.length, c1, matrix, 1, userXtX(users(i)), 1)
+                    //userXtX(users(i))(users(i)) += userXtX(users(i))(users(i))*c1
+                    //blas.daxpy(matrix.length, c1, matrix, 1, userXtX(users(i)), 1)
+                    blas.daxpy(vector.length, c1 + 1.0, vector, 1, userXy(users(i)), 1)
+                  }
                 } else {
+                  blas.daxpy(matrix.length, 1, matrix, 1, userXtX(users(i)), 1)
                   blas.daxpy(vector.length, ratings(i), vector, 1, userXy(users(i)), 1)
                 }
                 i += 1
@@ -730,6 +737,9 @@ object ALS {
 
             // calculate new user vector
             val result = new intW(0)
+            if(implicitPrefs) {
+               blas.daxpy(fullMatrix.length, 1.0, YtY.get, 1, fullMatrix, 1)
+            }
             lapack.dposv("U", factors, 1, fullMatrix, factors , userXy(i), factors, result)
             array(i) = userXy(i)
 
@@ -742,9 +752,42 @@ object ALS {
     }.withForwardedFieldsFirst("0").withForwardedFieldsSecond("0")
   }
 
+  /**
+    * Computes the YtY matrix for the implicit version before updating the factors
+    */
+  def computeYtY(items: DataSet[(Int, Array[Array[Double]])], factors: Int): Array[Double]={
+    val triangleSize = (factors*factors - factors)/2 + factors
+    val YtY = Array.fill(triangleSize)(0.0)
+    val env = ExecutionEnvironment.getExecutionEnvironment
+    val YtYd = env.fromElements(YtY)
+//    items.collect().foreach{
+//      item => item._2.foreach{
+//        x => blas.dspr("U", x.length, 1, x, 1, YtY)
+//      }
+//    }
+//    items.reduceGroup {
+//      (x,y) => {
+//        x.map(a => a._2).foreach(a => a.foreach(b => blas.dspr("U", b.length, 1, b, 1, YtY)))
+//      }
+//    }
+    items.mapWithBcVariable(YtYd) {
+      (x, ytY) => {
+        x._2.foreach(b => blas.dspr("U", b.length, 1, b, 1, ytY))
+      }
+    }
+//    items.map {
+//      x => {
+//        x._2.foreach(b => blas.dspr("U", b.length, 1, b, 1, YtY))
+//      }
+//    }
+
+    YtY
+  }
+
   /** Creates the meta information needed to route the item and user vectors to the respective user
     * and item blocks.
     * * @param userBlocks
+    *
     * @param itemBlocks
     * @param ratings
     * @param blockIDPartitioner
