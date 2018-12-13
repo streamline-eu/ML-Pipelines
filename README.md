@@ -1,3 +1,10 @@
+# Deprecation warning
+
+This repository is deprecated. The following Streamline developments were merged into the [https://github.com/streamline-eu/streamline-platform](Streamline Platform):
+ * Batch implicit ALS (iALS)
+ * Train batch, predict online
+ * Evaluation metrics
+
 # Apache Flink
 
 Apache Flink is an open source stream processing framework with powerful stream- and batch-processing capabilities.
